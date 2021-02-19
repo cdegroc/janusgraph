@@ -40,6 +40,11 @@ public class CQLSimpleSliceFunction extends AbstractCQLSliceFunction{
         return fromResultSet(asyncResultSet, this.getter);
     }
 
+    @Override
+    protected CompletableFuture<EntryList> getSliceAsync(CompletableFuture<AsyncResultSet> completableFutureSlice) {
+        return completableFutureSlice.thenApply(asyncResultSet -> fromResultSet(asyncResultSet, getter));
+    }
+
     private <T> T interruptibleWait(final CompletableFuture<T> result) throws BackendException {
         try {
             return result.get();

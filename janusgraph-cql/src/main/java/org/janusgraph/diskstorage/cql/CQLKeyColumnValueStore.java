@@ -69,7 +69,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Semaphore;
 import java.util.function.Function;
 
 import static com.datastax.oss.driver.api.querybuilder.QueryBuilder.bindMarker;
@@ -384,6 +386,11 @@ public class CQLKeyColumnValueStore implements KeyColumnValueStore {
     @Override
     public String getName() {
         return this.tableName;
+    }
+
+    @Override
+    public CompletableFuture<EntryList> getSliceAsync(KeySliceQuery query, StoreTransaction txh, Semaphore throttler) {
+        return cqlSliceFunction.getSliceAsync(query, txh, throttler);
     }
 
     @Override

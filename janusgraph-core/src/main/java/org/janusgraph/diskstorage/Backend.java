@@ -14,19 +14,15 @@
 
 package org.janusgraph.diskstorage;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
-import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.commons.lang3.StringUtils;
+import com.google.common.base.Function;
 import org.janusgraph.core.JanusGraphConfigurationException;
 import org.janusgraph.core.JanusGraphException;
 import org.janusgraph.core.schema.JanusGraphManagement;
 import org.janusgraph.diskstorage.configuration.BasicConfiguration;
 import org.janusgraph.diskstorage.configuration.ConfigOption;
 import org.janusgraph.diskstorage.configuration.Configuration;
-import org.janusgraph.diskstorage.configuration.ExecutorServiceBuilder;
-import org.janusgraph.diskstorage.configuration.ExecutorServiceConfiguration;
-import org.janusgraph.diskstorage.configuration.ExecutorServiceInstrumentation;
 import org.janusgraph.diskstorage.configuration.ModifiableConfiguration;
 import org.janusgraph.diskstorage.configuration.backend.CommonsConfiguration;
 import org.janusgraph.diskstorage.configuration.backend.KCVSConfiguration;
@@ -59,11 +55,13 @@ import org.janusgraph.diskstorage.log.kcvs.KCVSLog;
 import org.janusgraph.diskstorage.log.kcvs.KCVSLogManager;
 import org.janusgraph.diskstorage.util.BackendOperation;
 import org.janusgraph.diskstorage.util.MetricInstrumentedIndexProvider;
+import org.janusgraph.diskstorage.util.InstrumentedSemaphore;
 import org.janusgraph.diskstorage.util.MetricInstrumentedStoreManager;
 import org.janusgraph.diskstorage.util.StandardBaseTransactionConfig;
 import org.janusgraph.diskstorage.util.time.TimestampProvider;
 import org.janusgraph.graphdb.transaction.TransactionConfiguration;
 import org.janusgraph.util.datastructures.ExceptionWrapper;
+import org.janusgraph.util.stats.MetricManager;
 import org.janusgraph.util.system.ConfigurationUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -77,9 +75,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.ThreadFactory;
-import java.util.function.Function;
+import java.util.concurrent.Semaphore;
 import java.util.stream.Collectors;
 
 import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.BASIC_METRICS;
@@ -99,11 +95,7 @@ import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.MA
 import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.METRICS_MERGE_STORES;
 import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.METRICS_PREFIX;
 import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.PAGE_SIZE;
-import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.PARALLEL_BACKEND_EXECUTOR_SERVICE_CLASS;
-import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.PARALLEL_BACKEND_EXECUTOR_SERVICE_CORE_POOL_SIZE;
-import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.PARALLEL_BACKEND_EXECUTOR_SERVICE_KEEP_ALIVE_TIME;
-import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.PARALLEL_BACKEND_EXECUTOR_SERVICE_MAX_POOL_SIZE;
-import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.PARALLEL_BACKEND_EXECUTOR_SERVICE_MAX_SHUTDOWN_WAIT_TIME;
+import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.PARALLEL_BACKEND_CONCURRENCY;
 import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.PARALLEL_BACKEND_OPS;
 import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.STORAGE_BACKEND;
 import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.STORAGE_BATCH;
@@ -118,7 +110,6 @@ import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.US
 import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.USER_LOG;
 import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.USER_LOG_PREFIX;
 import static org.janusgraph.util.system.ExecuteUtil.executeWithCatching;
-import static org.janusgraph.util.system.ExecuteUtil.gracefulExecutorServiceShutdown;
 import static org.janusgraph.util.system.ExecuteUtil.throwIfException;
 
 /**
@@ -149,7 +140,10 @@ public class Backend implements LockerProvider, AutoCloseable {
     public static final String METRICS_MERGED_STORE = "stores";
     public static final String METRICS_MERGED_CACHE = "caches";
     public static final String METRICS_CACHE_SUFFIX = ".cache";
+    public static final String METRICS_CONCURRENT_REQUESTS_SUFFIX = ".concurrent-requests";
+
     public static final String METRICS_INDEX_PROVIDER_NAME = "indexProvider";
+
     public static final String LOCK_STORE_SUFFIX = "_lock_";
 
     public static final String SYSTEM_TX_LOG_NAME = "txlog";
@@ -219,8 +213,8 @@ public class Backend implements LockerProvider, AutoCloseable {
     private final Duration maxWriteTime;
     private final Duration maxReadTime;
     private final boolean cacheEnabled;
-    private final ExecutorService threadPool;
-    private final long threadPoolShutdownMaxWaitTime;
+
+    private final Semaphore throttler;
 
     private final Function<String, Locker> lockerCreator;
     private final ConcurrentHashMap<String, Locker> lockers = new ConcurrentHashMap<>();
@@ -262,8 +256,17 @@ public class Backend implements LockerProvider, AutoCloseable {
             storeManagerLocking = storeManager;
         }
 
-        threadPool = configuration.get(PARALLEL_BACKEND_OPS) ? buildExecutorService(configuration) : null;
-        threadPoolShutdownMaxWaitTime = configuration.get(PARALLEL_BACKEND_EXECUTOR_SERVICE_MAX_SHUTDOWN_WAIT_TIME);
+        if (configuration.get(PARALLEL_BACKEND_OPS)) {
+            int maxConcurrentRequests = configuration.get(PARALLEL_BACKEND_CONCURRENCY);
+            log.info("Initiated backend operations rate limiter with max concurrent requests {}", maxConcurrentRequests);
+            if (configuration.get(BASIC_METRICS)) {
+                throttler = new InstrumentedSemaphore(MetricManager.INSTANCE, getMetricsConcurrentRequestsName(), maxConcurrentRequests);
+            } else {
+                throttler = new Semaphore(maxConcurrentRequests);
+            }
+        } else {
+            throttler = null;
+        }
 
         final String lockBackendName = configuration.get(LOCK_BACKEND);
         if (REGISTERED_LOCKERS.containsKey(lockBackendName)) {
@@ -464,6 +467,15 @@ public class Backend implements LockerProvider, AutoCloseable {
         return configuration.get(METRICS_MERGE_STORES) ? METRICS_MERGED_CACHE : storeName + METRICS_CACHE_SUFFIX;
     }
 
+    private String getMetricsConcurrentRequestsName() {
+        String prefix = configuration.get(METRICS_PREFIX);
+        if (configuration.get(METRICS_MERGE_STORES)) {
+            return prefix + "." + METRICS_MERGED_STORE + METRICS_CONCURRENT_REQUESTS_SUFFIX;
+        } else {
+            return prefix + "." + EDGESTORE_NAME + METRICS_CONCURRENT_REQUESTS_SUFFIX;
+        }
+    }
+
     public KCVSLogManager getKCVSLogManager(String logName) {
         Preconditions.checkArgument(configuration.restrictTo(logName).get(LOG_BACKEND).equalsIgnoreCase(LOG_BACKEND.getDefaultValue()));
         return (KCVSLogManager)getLogManager(logName);
@@ -582,13 +594,12 @@ public class Backend implements LockerProvider, AutoCloseable {
 
         return new BackendTransaction(cacheTx, configuration, storeFeatures,
                 edgeStore, indexStore, txLogStore,
-                maxReadTime, indexTx, threadPool);
+                maxReadTime, indexTx, throttler);
     }
 
     public synchronized void close() throws BackendException {
         if (!hasAttemptedClose) {
             hasAttemptedClose = true;
-
             ExceptionWrapper exceptionWrapper = new ExceptionWrapper();
 
             executeWithCatching(managementLogManager::close, exceptionWrapper);
@@ -603,7 +614,7 @@ public class Backend implements LockerProvider, AutoCloseable {
             if (systemConfig != null) executeWithCatching(systemConfig::close, exceptionWrapper);
             if (userConfig != null) executeWithCatching(userConfig::close, exceptionWrapper);
             executeWithCatching(storeManager::close, exceptionWrapper);
-            gracefulExecutorServiceShutdown(threadPool, threadPoolShutdownMaxWaitTime);
+
             //Indexes
             for (IndexProvider index : indexes.values()){
                 executeWithCatching(index::close, exceptionWrapper);
@@ -686,26 +697,5 @@ public class Backend implements LockerProvider, AutoCloseable {
         } catch (InvocationTargetException e) {
             throw new IllegalArgumentException("Could not invoke method when configuring locking for: " + classname,e);
         }
-    }
-
-    @VisibleForTesting
-    static ExecutorService buildExecutorService(Configuration configuration){
-        Integer corePoolSize = configuration.getOrDefault(PARALLEL_BACKEND_EXECUTOR_SERVICE_CORE_POOL_SIZE);
-        Integer maxPoolSize = configuration.getOrDefault(PARALLEL_BACKEND_EXECUTOR_SERVICE_MAX_POOL_SIZE);
-        Long keepAliveTime = configuration.getOrDefault(PARALLEL_BACKEND_EXECUTOR_SERVICE_KEEP_ALIVE_TIME);
-        String executorServiceClass = configuration.getOrDefault(PARALLEL_BACKEND_EXECUTOR_SERVICE_CLASS);
-
-        ThreadFactory threadFactory = new ThreadFactoryBuilder().setNameFormat("Backend[%02d]").build();
-        if (configuration.get(BASIC_METRICS)) {
-            threadFactory = ExecutorServiceInstrumentation.instrument(configuration.get(METRICS_PREFIX), "backend", threadFactory);
-        }
-
-        ExecutorServiceConfiguration executorServiceConfiguration =
-            new ExecutorServiceConfiguration(executorServiceClass, corePoolSize, maxPoolSize, keepAliveTime, threadFactory);
-        ExecutorService executorService = ExecutorServiceBuilder.build(executorServiceConfiguration);
-        if (configuration.get(BASIC_METRICS)) {
-            executorService = ExecutorServiceInstrumentation.instrument(configuration.get(METRICS_PREFIX), "backend", executorService);
-        }
-        return executorService;
     }
 }

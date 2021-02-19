@@ -18,8 +18,11 @@ import com.datastax.oss.driver.api.core.config.DefaultDriverOption;
 import org.janusgraph.diskstorage.configuration.ConfigElement;
 import org.janusgraph.diskstorage.configuration.ConfigNamespace;
 import org.janusgraph.diskstorage.configuration.ConfigOption;
+import org.janusgraph.diskstorage.configuration.ExecutorServiceConfiguration;
 import org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration;
 import org.janusgraph.graphdb.configuration.PreInitializeConfigOptions;
+
+import java.util.concurrent.ExecutorService;
 
 /**
  * Configuration options for the CQL storage backend. These are managed under the 'cql' namespace in the configuration.
@@ -607,7 +610,7 @@ public interface CQLConfigOptions {
 
     ConfigOption<Integer> EXECUTOR_SERVICE_CORE_POOL_SIZE = new ConfigOption<>(
         EXECUTOR_SERVICE,
-        GraphDatabaseConfiguration.PARALLEL_BACKEND_EXECUTOR_SERVICE_CORE_POOL_SIZE.getName(),
+        "core-pool-size",
         "Core pool size for executor service. May be ignored if custom executor service is used " +
             "(depending on the implementation of the executor service).",
         ConfigOption.Type.LOCAL,
@@ -616,32 +619,42 @@ public interface CQLConfigOptions {
 
     ConfigOption<Integer> EXECUTOR_SERVICE_MAX_POOL_SIZE = new ConfigOption<>(
         EXECUTOR_SERVICE,
-        GraphDatabaseConfiguration.PARALLEL_BACKEND_EXECUTOR_SERVICE_MAX_POOL_SIZE.getName(),
-        GraphDatabaseConfiguration.PARALLEL_BACKEND_EXECUTOR_SERVICE_MAX_POOL_SIZE.getDescription(),
+        "max-pool-size",
+        "Maximum pool size for executor service. Ignored for `fixed` and `cached` executor services. " +
+            "May be ignored if custom executor service is used (depending on the implementation of the executor service).",
         ConfigOption.Type.LOCAL,
         Integer.class,
         Integer.MAX_VALUE);
 
     ConfigOption<Long> EXECUTOR_SERVICE_KEEP_ALIVE_TIME = new ConfigOption<>(
         EXECUTOR_SERVICE,
-        GraphDatabaseConfiguration.PARALLEL_BACKEND_EXECUTOR_SERVICE_KEEP_ALIVE_TIME.getName(),
-        GraphDatabaseConfiguration.PARALLEL_BACKEND_EXECUTOR_SERVICE_KEEP_ALIVE_TIME.getDescription(),
+        "keep-alive-time",
+        "Keep alive time in milliseconds for executor service. When the number of threads is greater than the `"+
+            EXECUTOR_SERVICE_CORE_POOL_SIZE.getName() +
+            "`, this is the maximum time that excess idle threads will wait for new tasks before terminating. " +
+            "Ignored for `fixed` executor service and may be ignored if custom executor service is used " +
+            "(depending on the implementation of the executor service).",
         ConfigOption.Type.LOCAL,
         Long.class,
         60000L);
 
     ConfigOption<String> EXECUTOR_SERVICE_CLASS = new ConfigOption<>(
         EXECUTOR_SERVICE,
-        GraphDatabaseConfiguration.PARALLEL_BACKEND_EXECUTOR_SERVICE_CLASS.getName(),
-        GraphDatabaseConfiguration.PARALLEL_BACKEND_EXECUTOR_SERVICE_CLASS.getDescription(),
+        "class",
+        "The implementation of `ExecutorService` to use. " +
+            "The full name of the class which extends `" + ExecutorService.class.getSimpleName() + "` which has either " +
+            "a public constructor with `" + ExecutorServiceConfiguration.class.getSimpleName() + "` argument (preferred constructor) or " +
+            "a public parameterless constructor. Other accepted options are: `fixed` - fixed thread pool size of `"
+            + EXECUTOR_SERVICE_MAX_POOL_SIZE.getName() + "` size; `cached` - cached thread pool size;",
         ConfigOption.Type.LOCAL,
         String.class,
         "fixed");
 
     ConfigOption<Long> EXECUTOR_SERVICE_MAX_SHUTDOWN_WAIT_TIME = new ConfigOption<>(
         EXECUTOR_SERVICE,
-        GraphDatabaseConfiguration.PARALLEL_BACKEND_EXECUTOR_SERVICE_MAX_SHUTDOWN_WAIT_TIME.getName(),
-        GraphDatabaseConfiguration.PARALLEL_BACKEND_EXECUTOR_SERVICE_MAX_SHUTDOWN_WAIT_TIME.getDescription(),
+        "max-shutdown-wait-time",
+        "Max shutdown wait time in milliseconds for executor service threads to be finished during shutdown. " +
+            "After this time threads will be interrupted (signalled with interrupt) without any additional wait time.",
         ConfigOption.Type.LOCAL,
         Long.class,
         60000L);

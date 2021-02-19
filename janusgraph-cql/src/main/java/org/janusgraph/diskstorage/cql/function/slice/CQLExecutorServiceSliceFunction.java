@@ -41,12 +41,21 @@ public class CQLExecutorServiceSliceFunction extends AbstractCQLSliceFunction{
 
     @Override
     protected EntryList getSlice(CompletableFuture<AsyncResultSet> completableFutureSlice) throws BackendException {
-        final Future<EntryList> result = Future.fromJavaFuture(
+        final io.vavr.concurrent.Future<EntryList> result = io.vavr.concurrent.Future.fromJavaFuture(
             this.executorService,
             completableFutureSlice
         ).map(resultSet -> fromResultSet(resultSet, this.getter));
         interruptibleWait(result);
         return result.getValue().get().getOrElseThrow(CQLKeyColumnValueStore.EXCEPTION_MAPPER);
+    }
+
+    @Override
+    protected CompletableFuture<EntryList> getSliceAsync(CompletableFuture<AsyncResultSet> completableFutureSlice) {
+        return Future.fromJavaFuture(
+            this.executorService,
+            completableFutureSlice)
+          .map(resultSet -> fromResultSet(resultSet, this.getter))
+          .toCompletableFuture();
     }
 
     /**

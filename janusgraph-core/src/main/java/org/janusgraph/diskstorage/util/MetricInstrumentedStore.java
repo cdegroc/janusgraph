@@ -38,6 +38,8 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Semaphore;
 
 /**
  * This class instruments an arbitrary KeyColumnValueStore backend with Metrics.
@@ -84,7 +86,7 @@ public class MetricInstrumentedStore implements KeyColumnValueStore {
     public static final String M_CLOSE = "close";
 
     public static final List<String> OPERATION_NAMES = Collections.unmodifiableList(
-        Arrays.asList(M_CONTAINS_KEY,M_GET_SLICE,M_MUTATE,M_ACQUIRE_LOCK,M_GET_KEYS));
+        Arrays.asList(M_CONTAINS_KEY, M_GET_SLICE, M_MUTATE, M_ACQUIRE_LOCK, M_GET_KEYS));
 
     public static final String M_CALLS = "calls";
     public static final String M_TIME = "time";
@@ -112,6 +114,16 @@ public class MetricInstrumentedStore implements KeyColumnValueStore {
             recordSliceMetrics(txh, result);
             return result;
         });
+    }
+
+    @Override
+    public CompletableFuture<EntryList> getSliceAsync(KeySliceQuery query, StoreTransaction txh, Semaphore throttler) throws BackendException {
+        return runWithMetrics(txh, metricsStoreName, M_GET_SLICE, () ->
+            backend.getSliceAsync(query, txh, throttler).whenComplete((value, error) -> {
+                if (value != null) {
+                    recordSliceMetrics(txh, value);
+                }
+            }));
     }
 
     @Override

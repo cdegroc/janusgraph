@@ -30,6 +30,7 @@ import org.janusgraph.diskstorage.util.StaticArrayEntry;
 import org.janusgraph.diskstorage.util.StaticArrayEntryList;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Semaphore;
 
 import static org.janusgraph.diskstorage.cql.CQLTransaction.getTransaction;
 
@@ -56,10 +57,29 @@ public abstract class AbstractCQLSliceFunction implements CQLSliceFunction{
         );
     }
 
+    @Override
+    public CompletableFuture<EntryList> getSliceAsync(KeySliceQuery query, StoreTransaction txh, Semaphore throttler) {
+        return getSliceAsync(
+            this.session.executeAsync(this.getSlice.boundStatementBuilder()
+                    .setByteBuffer(CQLKeyColumnValueStore.KEY_BINDING, query.getKey().asByteBuffer())
+                    .setByteBuffer(CQLKeyColumnValueStore.SLICE_START_BINDING, query.getSliceStart().asByteBuffer())
+                    .setByteBuffer(CQLKeyColumnValueStore.SLICE_END_BINDING, query.getSliceEnd().asByteBuffer())
+                    .setInt(CQLKeyColumnValueStore.LIMIT_BINDING, query.getLimit())
+                    .setConsistencyLevel(getTransaction(txh).getReadConsistencyLevel()).build())
+                .whenComplete((res, ex) -> {
+                    if (throttler != null) {
+                        throttler.release();
+                    }
+                })
+                .toCompletableFuture()
+        );
+    }
+
     protected static EntryList fromResultSet(final AsyncResultSet resultSet, final StaticArrayEntry.GetColVal<Tuple3<StaticBuffer, StaticBuffer, Row>, StaticBuffer> getter) {
         return StaticArrayEntryList.ofStaticBuffer(new CQLKeyColumnValueStore.CQLResultSetIterator(ResultSets.newInstance(resultSet)), getter);
     }
 
     protected abstract EntryList getSlice(CompletableFuture<AsyncResultSet> completableFutureSlice) throws BackendException;
+    protected abstract CompletableFuture<EntryList> getSliceAsync(CompletableFuture<AsyncResultSet> completableFutureSlice);
 
 }

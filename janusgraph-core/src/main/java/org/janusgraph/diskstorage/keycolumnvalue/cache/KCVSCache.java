@@ -29,6 +29,8 @@ import org.janusgraph.util.stats.MetricManager;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Semaphore;
 
 /**
  * @author Matthias Broecheler (me@matthiasb.com)
@@ -77,6 +79,10 @@ public abstract class KCVSCache extends KCVSProxy {
 
     public EntryList getSliceNoCache(KeySliceQuery query, StoreTransaction txh) throws BackendException {
         return store.getSlice(query,unwrapTx(txh));
+    }
+
+    public CompletableFuture<EntryList> getSliceNoCacheAsync(KeySliceQuery query, StoreTransaction txh, Semaphore throttler) throws BackendException {
+        return store.getSliceAsync(query,unwrapTx(txh), throttler);
     }
 
     public Map<StaticBuffer, EntryList> getSliceNoCache(List<StaticBuffer> keys, SliceQuery query, StoreTransaction txh) throws BackendException {

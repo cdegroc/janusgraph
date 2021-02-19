@@ -31,8 +31,10 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
 import static org.janusgraph.util.datastructures.ByteSize.GUAVA_CACHE_ENTRY_SIZE;
@@ -98,6 +100,35 @@ public class ExpirationKCVSCache extends KCVSCache {
                 incActionBy(1, CacheMetricsAction.MISS,txh);
                 return store.getSlice(query, unwrapTx(txh));
             });
+        } catch (Exception e) {
+            if (e instanceof JanusGraphException) throw (JanusGraphException)e;
+            else if (e.getCause() instanceof JanusGraphException) throw (JanusGraphException)e.getCause();
+            else throw new JanusGraphException(e);
+        }
+    }
+
+    @Override
+    public CompletableFuture<EntryList> getSliceAsync(final KeySliceQuery query, final StoreTransaction txh, final Semaphore throttler) throws BackendException {
+        incActionBy(1, CacheMetricsAction.RETRIEVAL,txh);
+        if (isExpired(query)) {
+            incActionBy(1, CacheMetricsAction.MISS,txh);
+            return store.getSliceAsync(query, unwrapTx(txh), throttler);
+        }
+
+        try {
+            EntryList e = cache.getIfPresent(query);
+            if (e != null) {
+                throttler.release();
+                return CompletableFuture.completedFuture(e);
+            } else {
+                incActionBy(1, CacheMetricsAction.MISS,txh);
+                return store.getSliceAsync(query, unwrapTx(txh), throttler)
+                    .whenComplete((value, error) -> {
+                        if (value != null) {
+                            cache.put(query, value);
+                        }
+                    });
+            }
         } catch (Exception e) {
             if (e instanceof JanusGraphException) throw (JanusGraphException)e;
             else if (e.getCause() instanceof JanusGraphException) throw (JanusGraphException)e.getCause();

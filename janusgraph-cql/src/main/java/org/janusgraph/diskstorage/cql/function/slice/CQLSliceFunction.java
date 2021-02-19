@@ -19,8 +19,14 @@ import org.janusgraph.diskstorage.EntryList;
 import org.janusgraph.diskstorage.keycolumnvalue.KeySliceQuery;
 import org.janusgraph.diskstorage.keycolumnvalue.StoreTransaction;
 
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Semaphore;
+
+
 public interface CQLSliceFunction {
 
     EntryList getSlice(final KeySliceQuery query, final StoreTransaction txh) throws BackendException;
+
+    CompletableFuture<EntryList> getSliceAsync(final KeySliceQuery query, final StoreTransaction txh, Semaphore throttler);
 
 }

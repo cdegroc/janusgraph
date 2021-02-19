@@ -91,7 +91,6 @@ import static org.janusgraph.diskstorage.cql.CQLConfigOptions.WRITE_CONSISTENCY;
 import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.CONNECTION_TIMEOUT;
 import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.IDS_RENEW_TIMEOUT;
 import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.INITIAL_STORAGE_VERSION;
-import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.PARALLEL_BACKEND_EXECUTOR_SERVICE_MAX_SHUTDOWN_WAIT_TIME;
 import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.ROOT_NS;
 import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.STORAGE_HOSTS;
 import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.STORAGE_PORT;
@@ -337,7 +336,6 @@ public class CQLConfigTest {
     public void shouldGracefullyCloseGraphWhichLostAConnection(){
         WriteConfiguration wc = getConfiguration();
         wc.set(ConfigElement.getPath(EXECUTOR_SERVICE_MAX_SHUTDOWN_WAIT_TIME), 60000);
-        wc.set(ConfigElement.getPath(PARALLEL_BACKEND_EXECUTOR_SERVICE_MAX_SHUTDOWN_WAIT_TIME), 60000);
         wc.set(ConfigElement.getPath(IDS_RENEW_TIMEOUT), 10000);
         wc.set(ConfigElement.getPath(CONNECTION_TIMEOUT), 10000);
         wc.set(ConfigElement.getPath(HEARTBEAT_TIMEOUT), 10000);

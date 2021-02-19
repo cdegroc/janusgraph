@@ -31,8 +31,6 @@ import org.janusgraph.diskstorage.configuration.BasicConfiguration;
 import org.janusgraph.diskstorage.configuration.ConfigNamespace;
 import org.janusgraph.diskstorage.configuration.ConfigOption;
 import org.janusgraph.diskstorage.configuration.Configuration;
-import org.janusgraph.diskstorage.configuration.ExecutorServiceBuilder;
-import org.janusgraph.diskstorage.configuration.ExecutorServiceConfiguration;
 import org.janusgraph.diskstorage.configuration.ModifiableConfiguration;
 import org.janusgraph.diskstorage.configuration.ReadConfiguration;
 import org.janusgraph.diskstorage.configuration.backend.CommonsConfiguration;
@@ -70,7 +68,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
 import javax.annotation.Nullable;
 import javax.management.MBeanServerFactory;
 
@@ -521,7 +518,7 @@ public class GraphDatabaseConfiguration {
             ConfigOption.Type.MASKABLE, Duration.ofSeconds(10L));
 
     /**
-     * If enabled, JanusGraph attempts to parallelize storage operations against the storage backend using a fixed thread pool shared
+     * If enabled, JanusGraph attempts to parallelize storage operations against the storage backend using throttled async operations
      * across the entire JanusGraph graph database instance. Parallelization is only applicable to certain storage operations and
      * can be beneficial when the operation is I/O bound.
      */
@@ -529,62 +526,13 @@ public class GraphDatabaseConfiguration {
             "Whether JanusGraph should attempt to parallelize storage operations",
             ConfigOption.Type.MASKABLE, true);
 
-    public static final ConfigNamespace PARALLEL_BACKEND_EXECUTOR_SERVICE = new ConfigNamespace(
-        STORAGE_NS,
-        "parallel-backend-executor-service",
-        "Configuration options for executor service which is used for parallel requests when `"+PARALLEL_BACKEND_OPS.toStringWithoutRoot()+"` is enabled.");
-
-    public static final ConfigOption<Integer> PARALLEL_BACKEND_EXECUTOR_SERVICE_CORE_POOL_SIZE = new ConfigOption<>(
-        PARALLEL_BACKEND_EXECUTOR_SERVICE,
-        "core-pool-size",
-        "Core pool size for executor service. May be ignored if custom executor service is used " +
-            "(depending on the implementation of the executor service)."+
-            "If not set the core pool size will be equal to number of processors multiplied by "
-            +ExecutorServiceBuilder.THREAD_POOL_SIZE_SCALE_FACTOR+".",
-        ConfigOption.Type.LOCAL,
-        Integer.class);
-
-    public static final ConfigOption<Integer> PARALLEL_BACKEND_EXECUTOR_SERVICE_MAX_POOL_SIZE = new ConfigOption<>(
-        PARALLEL_BACKEND_EXECUTOR_SERVICE,
-        "max-pool-size",
-        "Maximum pool size for executor service. Ignored for `fixed` and `cached` executor services. " +
-            "May be ignored if custom executor service is used (depending on the implementation of the executor service).",
-        ConfigOption.Type.LOCAL,
-        Integer.class,
-        Integer.MAX_VALUE);
-
-    public static final ConfigOption<Long> PARALLEL_BACKEND_EXECUTOR_SERVICE_KEEP_ALIVE_TIME = new ConfigOption<>(
-        PARALLEL_BACKEND_EXECUTOR_SERVICE,
-        "keep-alive-time",
-        "Keep alive time in milliseconds for executor service. When the number of threads is greater than the `"+
-            PARALLEL_BACKEND_EXECUTOR_SERVICE_CORE_POOL_SIZE.getName()+
-            "`, this is the maximum time that excess idle threads will wait for new tasks before terminating. " +
-            "Ignored for `fixed` executor service and may be ignored if custom executor service is used " +
-            "(depending on the implementation of the executor service).",
-        ConfigOption.Type.LOCAL,
-        Long.class,
-        60000L);
-
-    public static final ConfigOption<String> PARALLEL_BACKEND_EXECUTOR_SERVICE_CLASS = new ConfigOption<>(
-        PARALLEL_BACKEND_EXECUTOR_SERVICE,
-        "class",
-        "The implementation of `ExecutorService` to use. " +
-            "The full name of the class which extends `"+ ExecutorService.class.getSimpleName()+"` which has either " +
-            "a public constructor with `"+ ExecutorServiceConfiguration.class.getSimpleName()+"` argument (preferred constructor) or " +
-            "a public parameterless constructor. Other accepted options are: `fixed` - fixed thread pool of size `"
-            +PARALLEL_BACKEND_EXECUTOR_SERVICE_CORE_POOL_SIZE.getName()+"`; `cached` - cached thread pool;",
-        ConfigOption.Type.LOCAL,
-        String.class,
-        "fixed");
-
-    public static final ConfigOption<Long> PARALLEL_BACKEND_EXECUTOR_SERVICE_MAX_SHUTDOWN_WAIT_TIME = new ConfigOption<>(
-        PARALLEL_BACKEND_EXECUTOR_SERVICE,
-        "max-shutdown-wait-time",
-        "Max shutdown wait time in milliseconds for executor service threads to be finished during shutdown. " +
-            "After this time threads will be interrupted (signalled with interrupt) without any additional wait time.",
-        ConfigOption.Type.LOCAL,
-        Long.class,
-        60000L);
+    /**
+     * Maximum number of parallel operations against the storage backend across the entire JanusGraph graph database instance.
+     * Only applicable if PARALLEL_BACKEND_OPS is true.
+     */
+    public static final ConfigOption<Integer> PARALLEL_BACKEND_CONCURRENCY = new ConfigOption<>(STORAGE_NS,"parallel-backend-concurrency",
+            "Maximum number of parallel operations against the storage backend",
+            ConfigOption.Type.MASKABLE, Runtime.getRuntime().availableProcessors() * 2);
 
     public static final ConfigOption<String[]> STORAGE_HOSTS = new ConfigOption<>(STORAGE_NS,"hostname",
             "The hostname or comma-separated list of hostnames of storage backend servers.  " +

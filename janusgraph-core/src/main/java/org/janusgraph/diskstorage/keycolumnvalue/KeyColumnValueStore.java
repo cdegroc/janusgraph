@@ -22,6 +22,8 @@ import org.janusgraph.diskstorage.StaticBuffer;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Semaphore;
 
 /**
  * Interface to a data store that has a BigTable like representation of its data. In other words, the data store is comprised of a set of rows
@@ -51,6 +53,24 @@ public interface KeyColumnValueStore {
      * @see KeySliceQuery
      */
     EntryList getSlice(KeySliceQuery query, StoreTransaction txh) throws BackendException;
+
+    /**
+     Retrieves the list of entries (i.e. column-value pairs) for a specified query.
+     *
+     * @param query Query to get results for
+     * @param txh   Transaction
+     * @param throttler Semaphore to be released when query completes
+     * @return A CompletableFuture which result will be a List of entries up to a maximum of "limit" entries
+     * @throws org.janusgraph.diskstorage.BackendException when columnEnd &lt; columnStart
+     * @see KeySliceQuery
+     */
+    default CompletableFuture<EntryList> getSliceAsync(KeySliceQuery query, StoreTransaction txh, Semaphore throttler) throws BackendException {
+        return CompletableFuture.completedFuture(getSlice(query, txh)).whenComplete((res, ex) -> {
+            if (throttler != null) {
+                throttler.release();
+            }
+        });
+    }
 
     /**
      * Retrieves the list of entries (i.e. column-value pairs) as specified by the given {@link SliceQuery} for all

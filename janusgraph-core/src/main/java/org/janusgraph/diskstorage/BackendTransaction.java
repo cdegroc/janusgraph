@@ -41,8 +41,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Executor;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
@@ -75,7 +76,7 @@ public class BackendTransaction implements LoggableTransaction {
 
     private final Duration maxReadTime;
 
-    private final Executor threadPool;
+    private final Semaphore throttler;
 
     private final Map<String, IndexTransaction> indexTx;
 
@@ -85,7 +86,7 @@ public class BackendTransaction implements LoggableTransaction {
     public BackendTransaction(CacheTransaction storeTx, BaseTransactionConfig txConfig,
                               StoreFeatures features, KCVSCache edgeStore, KCVSCache indexStore,
                               KCVSCache txLogStore, Duration maxReadTime,
-                              Map<String, IndexTransaction> indexTx, Executor threadPool) {
+                              Map<String, IndexTransaction> indexTx, Semaphore throttler) {
         this.storeTx = storeTx;
         this.txConfig = txConfig;
         this.storeFeatures = features;
@@ -94,7 +95,7 @@ public class BackendTransaction implements LoggableTransaction {
         this.txLogStore = txLogStore;
         this.maxReadTime = maxReadTime;
         this.indexTx = indexTx;
-        this.threadPool = threadPool;
+        this.throttler = throttler;
     }
 
     public boolean hasAcquiredLock() {
@@ -267,12 +268,27 @@ public class BackendTransaction implements LoggableTransaction {
             Convenience Read Methods
      */
 
+    public CompletableFuture<EntryList> edgeStoreQueryAsync(final KeySliceQuery query, final Semaphore throttler) {
+        return executeRead(new Callable<CompletableFuture<EntryList>>() {
+            @Override
+            public CompletableFuture<EntryList> call() throws Exception {
+                return cacheEnabled?edgeStore.getSliceAsync(query, storeTx, throttler):
+                    edgeStore.getSliceNoCacheAsync(query, storeTx, throttler);
+            }
+
+            @Override
+            public String toString() {
+                return "EdgeStoreQueryAsync";
+            }
+        });
+    }
+
     public EntryList edgeStoreQuery(final KeySliceQuery query) {
         return executeRead(new Callable<EntryList>() {
             @Override
             public EntryList call() throws Exception {
                 return cacheEnabled?edgeStore.getSlice(query, storeTx):
-                                    edgeStore.getSliceNoCache(query,storeTx);
+                                    edgeStore.getSliceNoCache(query, storeTx);
             }
 
             @Override
@@ -297,65 +313,48 @@ public class BackendTransaction implements LoggableTransaction {
                 }
             });
         } else {
-            final Map<StaticBuffer,EntryList> results = new HashMap<>(keys.size());
-            if (threadPool == null || keys.size() < MIN_TASKS_TO_PARALLELIZE) {
+            final Map<StaticBuffer, EntryList> results = new HashMap<>(keys.size());
+            if (keys.size() < MIN_TASKS_TO_PARALLELIZE) {
                 for (StaticBuffer key : keys) {
-                    results.put(key,edgeStoreQuery(new KeySliceQuery(key, query)));
+                    results.put(key, edgeStoreQuery(new KeySliceQuery(key, query)));
                 }
             } else {
-                final CountDownLatch doneSignal = new CountDownLatch(keys.size());
                 final AtomicInteger failureCount = new AtomicInteger(0);
-                EntryList[] resultArray = new EntryList[keys.size()];
+                CompletableFuture<EntryList>[] resultArray = new CompletableFuture[keys.size()];
                 for (int i = 0; i < keys.size(); i++) {
-                    threadPool.execute(new SliceQueryRunner(new KeySliceQuery(keys.get(i), query),
-                            doneSignal, failureCount, resultArray, i));
+                    if (throttler != null) {
+                        try {
+                            throttler.acquire();  // BLOCK
+                        } catch (InterruptedException e) {
+                            throw new JanusGraphException("Interrupted while waiting for multi-query to complete", e);
+                        }
+                    }
+
+                    CompletableFuture<EntryList> future = edgeStoreQueryAsync(new KeySliceQuery(keys.get(i), query), throttler);
+                    future.whenComplete((value, error) -> {
+                        if (value == null) {
+                            failureCount.incrementAndGet();
+                        }
+                    });
+                    resultArray[i] = future;
                 }
-                try {
-                    doneSignal.await();
-                } catch (InterruptedException e) {
-                    throw new JanusGraphException("Interrupted while waiting for multi-query to complete", e);
-                }
+
                 if (failureCount.get() > 0) {
                     throw new JanusGraphException("Could not successfully complete multi-query. " + failureCount.get() + " individual queries failed.");
                 }
-                for (int i=0;i<keys.size();i++) {
-                    assert resultArray[i]!=null;
-                    results.put(keys.get(i),resultArray[i]);
+                
+                try {
+                    for (int i = 0; i < keys.size(); ++i) {
+                        assert resultArray[i] != null;
+                        results.put(keys.get(i), resultArray[i].get());  // BLOCK
+                    }
+                } catch (InterruptedException e) {
+                    throw new JanusGraphException("Interrupted while waiting for multi-query to complete", e);
+                } catch (ExecutionException e) {
+                    throw new JanusGraphException("Could not successfully complete multi-query. One or more individual queries failed.", e.getCause());
                 }
             }
             return results;
-        }
-    }
-
-    private class SliceQueryRunner implements Runnable {
-
-        final KeySliceQuery kq;
-        final CountDownLatch doneSignal;
-        final AtomicInteger failureCount;
-        final Object[] resultArray;
-        final int resultPosition;
-
-        private SliceQueryRunner(KeySliceQuery kq, CountDownLatch doneSignal, AtomicInteger failureCount,
-                                 Object[] resultArray, int resultPosition) {
-            this.kq = kq;
-            this.doneSignal = doneSignal;
-            this.failureCount = failureCount;
-            this.resultArray = resultArray;
-            this.resultPosition = resultPosition;
-        }
-
-        @Override
-        public void run() {
-            try {
-                List<Entry> result;
-                result = edgeStoreQuery(kq);
-                resultArray[resultPosition] = result;
-            } catch (Exception e) {
-                failureCount.incrementAndGet();
-                log.warn("Individual query in multi-transaction failed: ", e);
-            } finally {
-                doneSignal.countDown();
-            }
         }
     }
 
