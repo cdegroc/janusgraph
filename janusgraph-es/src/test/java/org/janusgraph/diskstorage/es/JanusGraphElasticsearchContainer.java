@@ -62,7 +62,7 @@ public class JanusGraphElasticsearchContainer extends ElasticsearchContainer {
         super(getElasticImage() + ":" + getVersion());
         withEnv("transport.host", "0.0.0.0");
         withEnv("xpack.security.enabled", "false");
-        withEnv("ES_JAVA_OPTS", "-Xms512m -Xmx512m");
+        withEnv("ES_JAVA_OPTS", "-Xms4G -Xmx4G");
         if (getEsMajorVersion().value == 5) {
             withEnv("script.max_compilations_per_minute", "30");
         }

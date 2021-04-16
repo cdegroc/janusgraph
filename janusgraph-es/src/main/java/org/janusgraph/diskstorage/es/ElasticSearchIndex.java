@@ -86,6 +86,8 @@ import java.util.stream.StreamSupport;
 @PreInitializeConfigOptions
 public class ElasticSearchIndex implements IndexProvider {
 
+    public static boolean SORT_BY_DOC = false; 
+
     private static final Logger log = LoggerFactory.getLogger(ElasticSearchIndex.class);
 
     private static final String STRING_MAPPING_SUFFIX = "__STRING";
@@ -1117,6 +1119,8 @@ public class ElasticSearchIndex implements IndexProvider {
         sr.setQuery(compat.prepareQuery(esQuery));
         if (!query.getOrder().isEmpty()) {
             addOrderToQuery(informations, sr, query.getOrder(), query.getStore());
+        } else if (SORT_BY_DOC) {
+            sr.addSort("_doc", "asc", "integer");
         }
         sr.setFrom(0);
         if (query.hasLimit()) {
@@ -1186,6 +1190,8 @@ public class ElasticSearchIndex implements IndexProvider {
         sr.setQuery(compat.queryString(query.getQuery()));
         if (!query.getOrders().isEmpty()) {
             addOrderToQuery(informations, sr, query.getOrders(), query.getStore());
+        } else if (SORT_BY_DOC) {
+            sr.addSort("_doc", "asc", "integer");
         }
         sr.setFrom(0);
         sr.setSize(size);

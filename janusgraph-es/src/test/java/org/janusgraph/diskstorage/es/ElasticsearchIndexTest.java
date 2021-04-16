@@ -22,6 +22,7 @@ import org.apache.commons.configuration.BaseConfiguration;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang.RandomStringUtils;
 import org.apache.commons.lang.reflect.FieldUtils;
+import org.apache.commons.math.stat.descriptive.SummaryStatistics;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpHost;
 import org.apache.http.client.methods.*;
@@ -62,11 +63,15 @@ import java.lang.reflect.Method;
 import java.net.InetAddress;
 import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.INDEX_NAME;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -202,6 +207,70 @@ public class ElasticsearchIndexTest extends IndexProviderTest {
         }
 
         tx = null;
+    }
+
+    @Test
+    public void testSortByDoc() throws BackendException {
+        final String store = "vertex";
+
+        final int warmupRuns = 3;
+        System.out.println("Using " + warmupRuns + " runs for warm-up");
+
+        final int[] runsValues = {1_000, 100, 100, 20, 10};
+        final int[] docsValues = {1_000, 10_000, 20_000, 50_000, 100_000};
+        final boolean[] sortByDocValues = {false, true};
+
+        initialize(store);
+        int docsIndexed = 300_000;
+        System.err.println("Creating index with " + docsIndexed + " vertices");
+        for (int i = 0; i < docsIndexed; ++i) {
+            add(store, "doc_" + i, createDocument(i), true);
+        }
+
+        clopen();
+
+        System.err.println("Starting evaluation");
+        for (int i = 0; i < docsValues.length; ++i) {
+            int docs = docsValues[i];
+
+            // Reset SORT_BY_DOC to its default value
+            ElasticSearchIndex.SORT_BY_DOC = false;
+
+            // Create a query that returns #docs vertices
+            final IndexQuery query = new IndexQuery(store, PredicateCondition.of(TIME, Cmp.LESS_THAN, docs));
+
+            // Run the query <warmupRuns> times
+            for (int warmupRun = 0; warmupRun < warmupRuns; ++warmupRun) {
+                tx.rollback();
+                tx.queryStream(query).count();
+            }
+
+            // Run the query <runs> times with and without sort=_doc
+            for (boolean sortByDocs : sortByDocValues) {
+                // Enable/Disable sort=_doc
+                ElasticSearchIndex.SORT_BY_DOC = sortByDocs;
+
+                SummaryStatistics stats = new SummaryStatistics();
+                int runs = runsValues[i];
+                for (int run = 0; run < runs; ++run) {
+                    tx.rollback();
+
+                    long start = System.nanoTime();
+                    tx.queryStream(query).count();
+                    long end = System.nanoTime();
+
+                    stats.addValue(NANOSECONDS.toMillis(end - start));
+                }
+
+                System.out.println(sortByDocs + " | " + runs + " | " + docs + " | " + stats.getMean() + " | " + stats.getStandardDeviation() + " | " + stats.getSum());
+            }
+        }
+    }
+
+    private Multimap<String, Object> createDocument(final long time) {
+        final Multimap<String, Object> toReturn = HashMultimap.create();
+        toReturn.put(TIME, time);
+        return toReturn;
     }
 
     @Test
