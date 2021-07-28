@@ -24,6 +24,14 @@
     </properties>
 
     <dependencies>
+        <!-- janusgraph-backend-testutils -> gremlin-server 3.5.0 -> metrics-core 3.0.2 -->
+        <dependency>
+            <groupId>org.janusgraph</groupId>
+            <artifactId>janusgraph-backend-testutils</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+
         <!-- Logging backends. -->
         <!-- Enforce a classpath ordering constraint to ensure log4j is used for logging. -->
         <dependency>
@@ -190,12 +198,6 @@
         </dependency>
 
         <!-- Test Dependencies -->
-        <dependency>
-            <groupId>org.janusgraph</groupId>
-            <artifactId>janusgraph-backend-testutils</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
         <dependency>
             <groupId>org.janusgraph</groupId>
             <artifactId>janusgraph-hadoop</artifactId>
