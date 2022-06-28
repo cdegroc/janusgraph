@@ -18,6 +18,7 @@ import com.google.common.base.Throwables;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Multimap;
+import org.apache.commons.configuration2.MapConfiguration;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.RandomStringUtils;
 import org.apache.commons.lang3.reflect.FieldUtils;
@@ -34,8 +35,10 @@ import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.util.EntityUtils;
+import org.apache.tinkerpop.gremlin.server.Settings;
 import org.apache.tinkerpop.shaded.jackson.databind.ObjectMapper;
 import org.janusgraph.core.Cardinality;
+import org.janusgraph.core.ConfiguredGraphFactory;
 import org.janusgraph.core.JanusGraphException;
 import org.janusgraph.core.attribute.Cmp;
 import org.janusgraph.core.attribute.Geo;
@@ -54,7 +57,11 @@ import org.janusgraph.diskstorage.indexing.IndexQuery;
 import org.janusgraph.diskstorage.indexing.KeyInformation;
 import org.janusgraph.diskstorage.indexing.StandardKeyInformation;
 import org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration;
+import org.janusgraph.graphdb.configuration.builder.GraphDatabaseConfigurationBuilder;
+import org.janusgraph.graphdb.database.StandardJanusGraph;
 import org.janusgraph.graphdb.internal.Order;
+import org.janusgraph.graphdb.management.ConfigurationManagementGraph;
+import org.janusgraph.graphdb.management.JanusGraphManager;
 import org.janusgraph.graphdb.query.condition.PredicateCondition;
 import org.janusgraph.graphdb.types.ParameterType;
 import org.janusgraph.util.system.ConfigurationUtil;
@@ -76,13 +83,16 @@ import java.net.InetAddress;
 import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Stream;
 
 import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.INDEX_NAME;
+import static org.janusgraph.graphdb.configuration.GraphDatabaseConfiguration.STORAGE_BACKEND;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -150,6 +160,65 @@ public class ElasticsearchIndexTest extends IndexProviderTest {
         return esr.setConfiguration(new ModifiableConfiguration(GraphDatabaseConfiguration.ROOT_NS,cc, BasicConfiguration.Restriction.NONE), index)
             .set(GraphDatabaseConfiguration.INDEX_MAX_RESULT_SET_SIZE, 3, index)
             .restrictTo(index);
+    }
+
+    @Test
+    public void updateGraphConfigurationByRemovingIndexBackend() throws Exception {
+        initializeConfiguredGraphFactory();
+
+        final String graphName = "graph1";
+
+        try {
+            // Create a graph with an inmemory storage backend and an ES index backend
+            final Map<String, Object> initialConfiguration = new HashMap();
+            initialConfiguration.put("graph.graphname", graphName);
+            initialConfiguration.put("storage.backend", "inmemory");
+            initialConfiguration.put("index.search.backend", "elasticsearch");
+            initialConfiguration.put("index.search.hostname", esr.getHostname());
+            initialConfiguration.put("index.search.port", esr.getPort());
+            ConfiguredGraphFactory.createConfiguration(new MapConfiguration(initialConfiguration));
+
+            {
+                // Mixed index is defined in the graph's configuration.
+                assertEquals("elasticsearch", ConfiguredGraphFactory.getConfiguration(graphName).get("index.search.backend"));
+
+                // The graph can be opened
+                final StandardJanusGraph initialGraph = (StandardJanusGraph) ConfiguredGraphFactory.open(graphName);
+                assertNotNull(initialGraph);
+                // Mixed index is available
+                assertTrue(initialGraph.getIndexSerializer().containsIndex("search"));
+            }
+
+            // Update the graph configuration, removing the search index
+            final Map<String, Object> updatedConfiguration = new HashMap();
+            updatedConfiguration.put("index.search.backend", null);
+            updatedConfiguration.put("index.search.hostname", null);
+            updatedConfiguration.put("index.search.port", null);
+            ConfiguredGraphFactory.updateConfiguration(graphName, new MapConfiguration(updatedConfiguration));
+
+            {
+                // Mixed index has been removed from the configuration.
+                assertFalse(ConfiguredGraphFactory.getConfiguration(graphName).containsKey("index.search.backend"));
+
+                // The graph can be opened
+                final StandardJanusGraph updatedGraph = (StandardJanusGraph) ConfiguredGraphFactory.open(graphName);
+                assertNotNull(updatedGraph);
+                // Mixed index was removed / is not known of the newly opened graph
+                assertFalse(updatedGraph.getIndexSerializer().containsIndex("search"));
+            }
+        } finally {
+            ConfiguredGraphFactory.removeConfiguration(graphName);
+            ConfiguredGraphFactory.close(graphName);
+        }
+    }
+
+    private void initializeConfiguredGraphFactory() {
+        // Same as AbstractConfiguredGraphFactoryTest#setup
+        new JanusGraphManager(new Settings());
+        final Map<String, Object> map = new HashMap<>();
+        map.put(STORAGE_BACKEND.toStringWithoutRoot(), "inmemory");
+        final StandardJanusGraph graph = new StandardJanusGraph(new GraphDatabaseConfigurationBuilder().build(new CommonsConfiguration(new MapConfiguration(map))));
+        new ConfigurationManagementGraph(graph);
     }
 
     @Test
