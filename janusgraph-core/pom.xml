@@ -134,6 +134,12 @@
                     </archive>
                 </configuration>
             </plugin>
+            <plugin>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <excludedGroups>${test.excluded.groups}</excludedGroups>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 </project>
